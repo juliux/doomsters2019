@@ -18,6 +18,7 @@ import vizdoom as vzd
 from argparse import ArgumentParser
 import sys
 import logging
+import cv2
 
 # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
@@ -33,11 +34,12 @@ class AISetup:
     discountFactor = 0.99
     learningStepsPerEpochs = 2000
     epochs = 30
-    replayMemorySize = 10000
+    replayMemorySize = 1000
     batchSize = 64
     testEpisodesPerEpoch = 100
     frameRepeat = 12
-    resolution = (30,45)
+    #resolution = (30,45)
+    resolution = (200,640)
     episodesToWatch = 10
     bots = 0
     saveModel = False
@@ -56,11 +58,12 @@ class AISetup:
 
     def setMode( self, mode ):
         if mode == 'TRAINING':
-            self.saveModel,self.loadModel,self.skipLearning = self.trainingList
+            #self.saveModel,self.loadModel,self.skipLearning = self.trainingList
+            self.saveModel,self.loadModel,self.skipLearning = (True,False,False)
         elif mode == 'COMPETITION':
             self.saveModel,self.loadModel,self.skipLearning = self.competitionList
 
-    def preprocess(img):
+    def preprocess(self,img):
         NominalRange = (0.25, 0.5)
         #myTempShape = img.shape
         #print( myTempShape )
@@ -108,9 +111,9 @@ class AISetup:
             #print( otsu )
             return otsu
 
-    def create_network(session, available_actions_count):
+    def create_network(self,session, available_actions_count):
         # Create the input variables
-        s1_ = tf.placeholder(tf.float32, [None] + list(resolution) + [1], name="State")
+        s1_ = tf.placeholder(tf.float32, [None] + list(self.resolution) + [1], name="State")
         a_ = tf.placeholder(tf.int32, [None], name="Action")
         target_q_ = tf.placeholder(tf.float32, [None, available_actions_count], name="TargetQ")
 
@@ -134,7 +137,7 @@ class AISetup:
         best_a = tf.argmax(q, 1)
         loss = tf.losses.mean_squared_error(q, target_q_)
 
-        optimizer = tf.train.RMSPropOptimizer(learning_rate)
+        optimizer = tf.train.RMSPropOptimizer(self.internalLearningRate)
         # Update the parameters according to the computed gradient using RMSProp.
         train_step = optimizer.minimize(loss)
 
@@ -155,22 +158,22 @@ class AISetup:
         return function_learn, function_get_q_values, function_simple_get_best_action
 
 
-    def learn_from_memory():
+    def learn_from_memory(self):
         """ Learns from a single transition (making use of replay memory).
         s2 is ignored if s2_isterminal """
 
         # Get a random minibatch from the replay memory and learns from it.
-        if memory.size > batch_size:
-            s1, a, s2, isterminal, r = memory.get_sample(batch_size)
+        if memory.size > self.batchSize:
+            s1, a, s2, isterminal, r = memory.get_sample(self.batchSize)
 
             q2 = np.max(get_q_values(s2), axis=1)
             target_q = get_q_values(s1)
             # target differs from q only for the selected action. The following means:
             # target_Q(s,a) = r + gamma * max Q(s2,_) if not isterminal else r
-            target_q[np.arange(target_q.shape[0]), a] = r + discount_factor * (1 - isterminal) * q2
+            target_q[np.arange(target_q.shape[0]), a] = r + self.discountFactor * (1 - isterminal) * q2
             learn(s1, target_q)
 
-    def perform_learning_step(epoch):
+    def perform_learning_step(self,epoch):
         """ Makes an action according to eps-greedy policy, observes the result
         (next state, reward) and learns from the transition"""
 
@@ -178,8 +181,8 @@ class AISetup:
             """# Define exploration rate change over time"""
             start_eps = 1.0
             end_eps = 0.1
-            const_eps_epochs = 0.1 * epochs  # 10% of learning time
-            eps_decay_epochs = 0.6 * epochs  # 60% of learning time
+            const_eps_epochs = 0.1 * self.epochs  # 10% of learning time
+            eps_decay_epochs = 0.6 * self.epochs  # 60% of learning time
 
             if epoch < const_eps_epochs:
                 return start_eps
@@ -190,7 +193,8 @@ class AISetup:
             else:
                 return end_eps
 
-        s1 = preprocess(game.get_state().screen_buffer)
+        s1 = self.preprocess(game.get_state().screen_buffer)
+        print(s1)
 
         # With probability eps make a random action.
         eps = exploration_rate(epoch)
@@ -199,20 +203,53 @@ class AISetup:
         else:
             # Choose the best action according to the network.
             a = get_best_action(s1)
-        reward = game.make_action(actions[a], frame_repeat)
+        reward = game.make_action(actions[a], self.frameRepeat)
 
         isterminal = game.is_episode_finished()
-        s2 = preprocess(game.get_state().screen_buffer) if not isterminal else None
+        s2 = self.preprocess(game.get_state().screen_buffer) if not isterminal else None
 
         # Remember the transition that was just experienced.
         memory.add_transition(s1, a, s2, isterminal, reward)
 
-        learn_from_memory()
+        self.learn_from_memory()
+
+    def initialize_vizdoom(self):
+        print("Initializing doom...")
+        game = vzd.DoomGame()
+        print(self.defaultConfiguration)
+        game.load_config(self.defaultConfiguration)
+        game.set_window_visible(True)
+        #game.set_mode(vzd.Mode.PLAYER)
+        game.set_mode(vzd.Mode.ASYNC_PLAYER)
+        game.set_screen_format(vzd.ScreenFormat.GRAY8)
+        game.set_screen_resolution(vzd.ScreenResolution.RES_640X480)
+        #game.add_game_args("-join 10.44.244.114")
+        #game.add_game_args("+name DOOMSTERS +colorset 0")
+
+        # JOPI MOD
+        #game.set_living_reward(-10)
+        #game.set_death_penalty(200)
+        #game.add_game_args("-host 1 -deathmatch +timelimit 10.0 "
+        #      "+sv_forcerespawn 1 +sv_noautoaim 1 +sv_respawnprotect 1 +sv_spawnfarthest 1 +sv_nocrouch 1 "
+        #       "+viz_respawn_delay 10 +viz_nocheat 1")
+        # Sets map to start (scenario .wad files can contain many maps).
+        game.set_doom_map("map01")
+        # //JOPI MOD
+
+        game.init()
+        #game.send_game_command("removebots")
+        #for i in range(bots):
+        #    game.send_game_command("addbot")
+
+        print("Doom initialized.")
+        #player_number = int(game.get_game_variable(GameVariable.PLAYER_NUMBER))
+        #last_frags = 0
+        return game
 
 # +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 class ReplayMemory:
-    def __init__(self, capacity):
+    def __init__(self,capacity,resolution):
         channels = 1
         state_shape = (capacity, resolution[0], resolution[1], channels)
         self.s1 = np.zeros(state_shape, dtype=np.float32)
@@ -311,5 +348,127 @@ f_format = logging.Formatter('%(asctime)s - %(process)d - %(levelname)s - %(mess
 f_handler.setFormatter(f_format)
 botLogger.addHandler(f_handler)
 
-# - Main banner printing
+# - Setup parameters
 
+myAIAgent = AISetup()
+myAIAgent.setDefaultModelFolder('/home/juliux/Documents/repository/doom2019/model')
+myAIAgent.setDefaultConfiguration('/home/juliux/Documents/repository/doom2019/etc/main_configuration.cfg')
+
+# - Set Mode
+myAIAgent.setMode('TRAINING')
+
+# - Vizdoom initialization
+game = myAIAgent.initialize_vizdoom()
+
+# - Setup player behaviour
+myPlayer = playerBehaviour()
+myPlayer.playerBehaviour(3)
+actions = myPlayer.actions
+
+# - Replay Memory
+memory = ReplayMemory(capacity=myAIAgent.replayMemorySize,resolution=myAIAgent.resolution)
+
+session = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+
+#session = tf.Session()
+learn, get_q_values, get_best_action = myAIAgent.create_network(session, len(actions))
+saver = tf.train.Saver()
+if myAIAgent.loadModel:
+    print("Loading model from: ", myAIAgent.defaultModelFolder)
+    saver.restore(session, myAIAgent.defaultModelFolder)
+else:
+    init = tf.global_variables_initializer()
+    session.run(init)
+    print("Starting the training!")
+
+time_start = time()
+if not myAIAgent.skipLearning:
+    for epoch in range(myAIAgent.epochs):
+        print("\nEpoch %d\n-------" % (epoch + 1))
+        train_episodes_finished = 0
+        train_scores = []
+
+        print("Training...")
+        game.new_episode()
+        for learning_step in trange(myAIAgent.learningStepsPerEpochs,leave=False):
+            myAIAgent.perform_learning_step(epoch)
+            if game.is_episode_finished():
+                score = game.get_total_reward()
+                train_scores.append(score)
+                game.new_episode()
+                train_episodes_finished += 1
+
+        print("%d training episodes played." % train_episodes_finished)
+
+        train_scores = np.array(train_scores)
+
+        print("Results: mean: %.1f±%.1f," % (train_scores.mean(), train_scores.std()), \
+                  "min: %.1f," % train_scores.min(), "max: %.1f," % train_scores.max())
+
+        print("\nTesting...")
+        test_episode = []
+        test_scores = []
+        for test_episode in trange(myAIAgent.testEpisodesPerEpoch,leave=False):
+            game.new_episode()
+            while not game.is_episode_finished():
+                state = preprocess(game.get_state().screen_buffer)
+                best_action_index = get_best_action(state)
+
+                game.make_action(actions[best_action_index], frame_repeat)
+            r = game.get_total_reward()
+            test_scores.append(r)
+
+        test_scores = np.array(test_scores)
+        print("Results: mean: %.1f±%.1f," % (
+                test_scores.mean(), test_scores.std()), "min: %.1f" % test_scores.min(),
+                  "max: %.1f" % test_scores.max())
+
+        print("Saving the network weigths to:", myAIAgent.defaultModelFolder)
+        saver.save(session, myAIAgent.defaultModelFolder)
+
+        print("Total elapsed time: %.2f minutes" % ((time() - time_start) / 60.0))
+
+game.close()
+print("======================================")
+print("Training finished. It's time to watch!")
+
+# Reinitialize the game with window visible
+game.set_window_visible(True)
+game.set_mode(vzd.Mode.ASYNC_PLAYER)
+
+# - Server init
+#game.add_game_args("-join 10.44.244.114")
+#game.add_game_args("+name DOOMSTERS +colorset 0")
+game.init()
+
+
+#game.send_game_command("removebots")
+#for i in range(bots):
+#    game.send_game_command("addbot")
+
+#for _ in range(episodes_to_watch):
+#    game.new_episode()
+while not game.is_episode_finished():
+    state = preprocess(game.get_state().screen_buffer)
+    best_action_index = get_best_action(state)
+
+    # Instead of make_action(a, frame_repeat) in order to make the animation smooth
+    #game.set_action(actions[best_action_index])
+    #for _ in range(frame_repeat):
+    #game.advance_action()
+
+
+    #game.make_action(choice(actions))
+    game.make_action(actions[best_action_index])
+
+
+
+    # Sleep between episodes
+    #    sleep(1.0)
+    #    score = game.get_total_reward()
+    #    print("Total score: ", score)
+    if game.is_player_dead():
+        #print("Player " + str(player_number) + " died.")
+        game.respawn_player()
+
+game.close()
