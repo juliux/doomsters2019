@@ -32,7 +32,8 @@ import cv2
 class AISetup:
     internalLearningRate = 0.00025
     discountFactor = 0.99
-    learningStepsPerEpochs = 2000
+    learningStepsPerEpochs = 2
+    #learningStepsPerEpochs = 2000
     epochs = 30
     replayMemorySize = 1000
     batchSize = 64
@@ -41,7 +42,8 @@ class AISetup:
     #resolution = (30,45)
     resolution = (200,640)
     episodesToWatch = 10
-    bots = 0
+    episodesToWatch = 1
+    bots = 10
     saveModel = False
     loadModel = True
     skipLearning = True
@@ -152,7 +154,7 @@ class AISetup:
         def function_get_best_action(state):
             return session.run(best_a, feed_dict={s1_: state})
 
-        def function_simple_get_best_action(state):
+        def function_simple_get_best_action(state,resolution):
             return function_get_best_action(state.reshape([1, resolution[0], resolution[1], 1]))[0]
 
         return function_learn, function_get_q_values, function_simple_get_best_action
@@ -238,7 +240,7 @@ class AISetup:
 
         game.init()
         #game.send_game_command("removebots")
-        #for i in range(bots):
+        #for i in range(self.bots):
         #    game.send_game_command("addbot")
 
         print("Doom initialized.")
@@ -356,6 +358,7 @@ myAIAgent.setDefaultConfiguration('/home/juliux/Documents/repository/doom2019/et
 
 # - Set Mode
 myAIAgent.setMode('TRAINING')
+#myAIAgent.setMode('COMPETITION')
 
 # - Vizdoom initialization
 game = myAIAgent.initialize_vizdoom()
@@ -402,8 +405,7 @@ if not myAIAgent.skipLearning:
 
         train_scores = np.array(train_scores)
 
-        print("Results: mean: %.1f±%.1f," % (train_scores.mean(), train_scores.std()), \
-                  "min: %.1f," % train_scores.min(), "max: %.1f," % train_scores.max())
+        #print("Results: mean: %.1f±%.1f," % (train_scores.mean(), train_scores.std()),"min: %.1f," % train_scores.min(), "max: %.1f," % train_scores.max())
 
         print("\nTesting...")
         test_episode = []
@@ -411,10 +413,10 @@ if not myAIAgent.skipLearning:
         for test_episode in trange(myAIAgent.testEpisodesPerEpoch,leave=False):
             game.new_episode()
             while not game.is_episode_finished():
-                state = preprocess(game.get_state().screen_buffer)
-                best_action_index = get_best_action(state)
+                state = myAIAgent.preprocess(game.get_state().screen_buffer)
+                best_action_index = get_best_action(state,myAIAgent.resolution)
 
-                game.make_action(actions[best_action_index], frame_repeat)
+                game.make_action(actions[best_action_index], myAIAgent.frameRepeat)
             r = game.get_total_reward()
             test_scores.append(r)
 
@@ -449,7 +451,7 @@ game.init()
 #for _ in range(episodes_to_watch):
 #    game.new_episode()
 while not game.is_episode_finished():
-    state = preprocess(game.get_state().screen_buffer)
+    state = myAIAgent.preprocess(game.get_state().screen_buffer)
     best_action_index = get_best_action(state)
 
     # Instead of make_action(a, frame_repeat) in order to make the animation smooth
